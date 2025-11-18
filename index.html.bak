@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Expense Tracker - Naga & Sandeep</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-yellow': {
+                            DEFAULT: '#FBBF24',
+                        },
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- React and ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- PapaParse for CSV export -->
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    
+    <style>
+        .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.25rem; }
+        .calendar-day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 0.375rem; cursor: pointer; transition: all 0.2s; color: white; }
+        .calendar-day:hover { background-color: #374151; }
+        .calendar-day.selected { background-color: #FBBF24; color: #111827; font-weight: bold; }
+        .calendar-day.today { border: 1px solid #FBBF24; }
+        .calendar-day.disabled { opacity: 0.3; cursor: not-allowed; }
+        .calendar-header { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.25rem; margin-bottom: 0.5rem; }
+        .calendar-header-day { text-align: center; font-size: 0.875rem; font-weight: 600; color: #FBBF24; }
+    </style>
+</head>
+<body class="bg-gray-900">
+    <div id="root">Loading...</div>
+    
+    <script>
+        window.addEventListener('load', function() {
+            console.log('Page loaded, React:', React, 'ReactDOM:', ReactDOM);
+            
+            if (!React || !ReactDOM) {
+                document.getElementById('root').innerHTML = '<div style="color: red; padding: 20px;">Error: React not loaded. Please check your internet connection.</div>';
+                return;
+            }
+            
+            const { useState, useEffect, useCallback, useContext, createContext, useMemo } = React;
+            
+            const cn = (...classes) => classes.filter(Boolean).join(' ');
+            
+            const formatDate = (date, formatStr = 'yyyy-MM-dd') => {
+            if (!date) return '';
+            const d = new Date(date);
+            const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+            const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            
+            let str = formatStr;
+            str = str.replace(/yyyy/g, d.getFullYear());
+            str = str.replace(/MMM/g, months[d.getMonth()].slice(0, 3));
+            str = str.replace(/MMMM/g, months[d.getMonth()]);
+            str = str.replace(/EEEE/g, daysOfWeek[d.getDay()]);
+            str = str.replace(/dd/g, String(d.getDate()).padStart(2, '0'));
+            str = str.replace(/MM/g, String(d.getMonth() + 1).padStart(2, '0'));
+            str = str.replace(/HH/g, String(d.getHours()).padStart(2, '0'));
+            str = str.replace(/mm/g, String(d.getMinutes()).padStart(2, '0'));
+            str = str.replace(/ss/g, String(d.getSeconds()).padStart(2, '0'));
+            str = str.replace(/p/g, d.getHours() >= 12 ? 'PM' : 'AM');
+            str = str.replace(/do/g, () => {
+                const day = d.getDate();
+                if (day > 3 && day < 21) return day + 'th';
+                switch (day % 10) {
+                    case 1: return day + 'st';
+                    case 2: return day + 'nd';
+                    case 3: return day + 'rd';
+                    default: return day + 'th';
+                }
+            });
+            return str;
+        };
+        
+        const isToday = (date) => {
+            if (!date) return false;
+            const today = new Date();
+            const d = new Date(date);
+            return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
+        };
+        
+        const isSameDay = (date1, date2) => {
+            if (!date1 || !date2) return false;
+            const d1 = new Date(date1);
+            const d2 = new Date(date2);
+            return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+        };
+        
+        function useLocalStorage(key, initialValue) {
+            const readValue = useCallback(() => {
+                if (typeof window === 'undefined') return initialValue;
+                try {
+                    const item = window.localStorage.getItem(key);
+                    if (item) {
+                        return JSON.parse(item, (k, v) => {
+                            if (k === 'createdAt' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/.test(v)) {
+                                return new Date(v);
+                            }
+                            return v;
+                        });
+                    }
+                } catch (error) {
+                    console.warn(`Error reading localStorage:`, error);
+                }
+                return initialValue;
+            }, [initialValue, key]);
+
+            const [storedValue, setStoredValue] = useState(readValue);
+
+            const setValue = (value) => {
+                try {
+                    const valueToStore = value instanceof Function ? value(storedValue) : value;
+                    setStoredValue(valueToStore);
+                    if (typeof window !== 'undefined') {
+                        window.localStorage.setItem(key, JSON.stringify(valueToStore));
+                    }
+                } catch (error) {
+                    console.error(error);
+                }
+            };
+
+            useEffect(() => {
+                const handleStorageChange = (e) => {
+                    if (e.key === key) {
+                        setStoredValue(readValue());
+                    }
+                };
+                window.addEventListener('storage', handleStorageChange);
+                return () => window.removeEventListener('storage', handleStorageChange);
+            }, [key, readValue]);
+
+            return [storedValue, setValue];
+        }
+        
+        const Icons = {
+            Wallet: (props) => React.createElement('svg', { ...props, className: cn('w-8 h-8 text-brand-yellow', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, 
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z' })
+            ),
+            Calendar: (props) => React.createElement('svg', { ...props, className: cn('w-5 h-5 text-brand-yellow', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, 
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' })
+            ),
+            PlusCircle: (props) => React.createElement('svg', { ...props, className: cn('w-5 h-5', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, 
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 4v16m8-8H4' })
+            ),
+            ShoppingCart: (props) => React.createElement('svg', { ...props, className: cn('w-5 h-5', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, 
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z' })
+            ),
+            UserCog: (props) => React.createElement('svg', { ...props, className: cn('w-5 h-5', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' }),
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z' })
+            ),
+            Lock: (props) => React.createElement('svg', { ...props, className: cn('w-8 h-8 text-brand-yellow', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z' })
+            ),
+            LogOut: (props) => React.createElement('svg', { ...props, className: cn('w-5 h-5', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1' })
+            ),
+            Download: (props) => React.createElement('svg', { ...props, className: cn('w-4 h-4', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4' })
+            ),
+            Trash2: (props) => React.createElement('svg', { ...props, className: cn('w-4 h-4', props.className), fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' },
+                React.createElement('path', { strokeLinecap: 'round', strokeLinejoin: 'round', strokeWidth: 2, d: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' })
+            )
+        };
+        
+        const AppContext = createContext(undefined);
+
+        const AppProvider = ({ children }) => {
+            const [walletBalance, setWalletBalance] = useLocalStorage('walletBalance', 94);
+            const [expenses, setExpenses] = useLocalStorage('expenses', []);
+            const [isAdmin, setIsAdmin] = useState(false);
+
+            const addExpense = (expense) => {
+                const newExpense = { ...expense, id: new Date().toISOString() + Math.random(), createdAt: new Date() };
+                setExpenses(prev => [newExpense, ...prev]);
+                setWalletBalance(prev => prev - expense.amount);
+            };
+
+            const addBalance = (amount) => {
+                setWalletBalance(prev => prev + amount);
+                const creditLog = { id: new Date().toISOString() + Math.random(), createdAt: new Date(), item: 'Balance Added', amount: amount, message: 'Credited by Admin' };
+                setExpenses(prev => [creditLog, ...prev]);
+            };
+
+            const deleteExpense = (expenseId) => {
+                const expenseToDelete = expenses.find(exp => exp.id === expenseId);
+                if (!expenseToDelete) return;
+                if (expenseToDelete.item === 'Balance Added') {
+                    setWalletBalance(prev => prev - expenseToDelete.amount);
+                } else {
+                    setWalletBalance(prev => prev + expenseToDelete.amount);
+                }
+                setExpenses(prev => prev.filter(exp => exp.id !== expenseId));
+            };
+
+            const login = (user, pass) => {
+                if (user === 'sandeep' && pass === 'Adithi@2013') {
+                    setIsAdmin(true);
+                    return true;
+                }
+                return false;
+            };
+
+            const logout = () => setIsAdmin(false);
+
+            return React.createElement(AppContext.Provider, {
+                value: { walletBalance, expenses, addExpense, addBalance, deleteExpense, isAdmin, login, logout }
+            }, children);
+        };
+
+        const useAppContext = () => {
+            const context = useContext(AppContext);
+            if (context === undefined) throw new Error('useAppContext must be used within an AppProvider');
+            return context;
+        };
+        
+        const Card = ({ className, children, ...props }) => React.createElement('div', {
+            className: cn('bg-gray-800 rounded-xl shadow-lg border border-gray-700', className),
+            ...props
+        }, children);
+
+        const CardHeader = ({ className, children }) => React.createElement('div', {
+            className: cn('p-4 sm:p-6 border-b border-gray-700', className)
+        }, children);
+
+        const CardTitle = ({ className, children }) => React.createElement('h3', {
+            className: cn('text-lg font-semibold text-gray-100', className)
+        }, children);
+
+        const CardContent = ({ className, children }) => React.createElement('div', {
+            className: cn('p-4 sm:p-6', className)
+        }, children);
+        
+        const Calendar = ({ selectedDate, onSelect }) => {
+            const currentMonth = selectedDate.getMonth();
+            const currentYear = selectedDate.getFullYear();
+            const today = new Date();
+            const daysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+            const firstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+            
+            const days = [];
+            const monthDays = daysInMonth(currentYear, currentMonth);
+            const firstDay = firstDayOfMonth(currentYear, currentMonth);
+            
+            for (let i = 0; i < firstDay; i++) days.push(null);
+            for (let i = 1; i <= monthDays; i++) days.push(i);
+            
+            const getMonthName = () => ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][currentMonth];
+            
+            return React.createElement('div', { className: 'text-white' },
+                React.createElement('div', { className: 'flex justify-between items-center mb-4' },
+                    React.createElement('button', { onClick: () => { const newDate = new Date(currentYear, currentMonth - 1, 1); if (newDate <= today) onSelect(newDate); }, className: 'p-1 hover:bg-gray-700 rounded', disabled: currentYear === today.getFullYear() && currentMonth === today.getMonth() }, '←'),
+                    React.createElement('div', { className: 'font-semibold' }, `${getMonthName()} ${currentYear}`),
+                    React.createElement('button', { onClick: () => { const newDate = new Date(currentYear, currentMonth + 1, 1); if (newDate <= today) onSelect(newDate); }, className: 'p-1 hover:bg-gray-700 rounded', disabled: currentYear === today.getFullYear() && currentMonth === today.getMonth() }, '→')
+                ),
+                React.createElement('div', { className: 'calendar-header' },
+                    ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => React.createElement('div', { key: day, className: 'calendar-header-day' }, day))
+                ),
+                React.createElement('div', { className: 'calendar' },
+                    days.map((day, idx) => {
+                        if (!day) return React.createElement('div', { key: idx, className: 'calendar-day' });
+                        const fullDate = new Date(currentYear, currentMonth, day);
+                        const selected = selectedDate.getDate() === day && selectedDate.getMonth() === currentMonth && selectedDate.getFullYear() === currentYear;
+                        const isDayToday = isToday(fullDate);
+                        const isFuture = fullDate > today;
+                        return React.createElement('button', {
+                            key: idx, onClick: () => !isFuture && onSelect(fullDate), disabled: isFuture,
+                            className: `calendar-day ${selected ? 'selected' : ''} ${isDayToday && !selected ? 'today' : ''} ${isFuture ? 'disabled' : ''}`
+                        }, day);
+                    })
+                )
+            );
+        };
+        
+        const UserPage = ({ setView }) => {
+            const { walletBalance, expenses, addExpense } = useAppContext();
+            const [selectedDate, setSelectedDate] = useState(new Date());
+            const [item, setItem] = useState('');
+            const [amount, setAmount] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const parsedAmount = parseFloat(amount);
+                if (!item || isNaN(parsedAmount) || parsedAmount <= 0) {
+                    alert("Please enter a valid item and amount.");
+                    return;
+                }
+                addExpense({ item, amount: parsedAmount, message: '' });
+                setItem('');
+                setAmount('');
+            };
+
+            const dailyExpenses = useMemo(() => expenses.filter(exp => isSameDay(exp.createdAt, selectedDate) && exp.item !== 'Balance Added'), [expenses, selectedDate]);
+            const totalSpentToday = useMemo(() => dailyExpenses.reduce((sum, exp) => sum + exp.amount, 0), [dailyExpenses]);
+            const remainingBalanceToday = walletBalance;
+
+            return React.createElement('div', { className: 'min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8' },
+                React.createElement('div', { className: 'max-w-4xl mx-auto' },
+                    React.createElement('header', { className: 'mb-8 flex justify-between items-start' },
+                        React.createElement('div', null,
+                            React.createElement('h1', { className: 'text-3xl font-bold text-brand-yellow' }, 'Hi Naga,'),
+                            React.createElement('p', { className: 'text-gray-400' }, 'Here\'s your expense summary.')
+                        ),
+                        React.createElement('button', { onClick: () => setView('admin'), className: 'flex items-center space-x-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm sm:text-base' },
+                            React.createElement(Icons.UserCog),
+                            React.createElement('span', { className: 'ml-2' }, 'Admin Panel')
+                        )
+                    ),
+                    React.createElement(Card, { className: 'mb-6' },
+                        React.createElement(CardContent, { className: 'flex items-center justify-between' },
+                            React.createElement('div', { className: 'flex items-center space-x-3' },
+                                React.createElement(Icons.Wallet),
+                                React.createElement('span', { className: 'text-lg text-gray-300' }, 'Current Wallet Balance:')
+                            ),
+                            React.createElement('span', { className: 'text-2xl font-bold text-white' }, `₹${walletBalance.toFixed(2)}`)
+                        )
+                    ),
+                    React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
+                        React.createElement('div', { className: 'lg:col-span-2 space-y-6' },
+                            React.createElement(Card, null,
+                                React.createElement(CardHeader, null, React.createElement(CardTitle, null, 'Add New Expense')),
+                                React.createElement(CardContent, null,
+                                    React.createElement('form', { onSubmit: handleSubmit, className: 'space-y-4' },
+                                        React.createElement('div', { className: 'relative' },
+                                            React.createElement(Icons.ShoppingCart, { className: 'absolute left-3 top-1/2 -translate-y-1/2' }),
+                                            React.createElement('input', { type: 'text', placeholder: 'Item Purchased', value: item, onChange: e => setItem(e.target.value), className: 'w-full bg-gray-700 border-gray-600 text-white rounded-md p-2 pl-10 focus:ring-brand-yellow focus:border-brand-yellow', required })
+                                        ),
+                                        React.createElement('div', { className: 'relative' },
+                                            React.createElement('span', { className: 'absolute left-3 top-1/2 -translate-y-1/2 text-gray-400' }, '₹'),
+                                            React.createElement('input', { type: 'number', placeholder: 'Amount Spent', value: amount, onChange: e => setAmount(e.target.value), className: 'w-full bg-gray-700 border-gray-600 text-white rounded-md p-2 pl-8 focus:ring-brand-yellow focus:border-brand-yellow', required })
+                                        ),
+                                        React.createElement('button', { type: 'submit', className: 'w-full flex items-center justify-center bg-brand-yellow text-gray-900 font-bold py-2.5 px-4 rounded-md hover:bg-brand-yellow/90 transition-colors' },
+                                            React.createElement(Icons.PlusCircle),
+                                            React.createElement('span', { className: 'ml-2' }, 'Submit Expense')
+                                        )
+                                    )
+                                )
+                            ),
+                            React.createElement(Card, null,
+                                React.createElement(CardHeader, null, React.createElement(CardTitle, null, `Daily Expense Summary (${formatDate(selectedDate, 'do MMMM')})`)),
+                                React.createElement(CardContent, { className: 'space-y-3' },
+                                    React.createElement('div', { className: 'flex justify-between items-center text-lg' },
+                                        React.createElement('span', { className: 'text-gray-300' }, 'Total Spent Today:'),
+                                        React.createElement('span', { className: 'font-semibold text-red-400' }, `- ₹${totalSpentToday.toFixed(2)}`)
+                                    ),
+                                    React.createElement('div', { className: 'flex justify-between items-center text-lg' },
+                                        React.createElement('span', { className: 'text-gray-300' }, 'Remaining Balance:'),
+                                        React.createElement('span', { className: 'font-semibold text-green-400' }, `₹${remainingBalanceToday.toFixed(2)}`)
+                                    )
+                                )
+                            )
+                        ),
+                        React.createElement('div', { className: 'row-start-1 lg:row-auto' },
+                            React.createElement(Card, null,
+                                React.createElement(CardHeader, { className: 'flex items-center space-x-2' },
+                                    React.createElement(Icons.Calendar),
+                                    React.createElement(CardTitle, null, 'Select Date')
+                                ),
+                                React.createElement(CardContent, null, React.createElement(Calendar, { selectedDate, onSelect: setSelectedDate }))
+                            )
+                        )
+                    )
+                )
+            );
+        };
+        
+        const LoginPage = ({ setView }) => {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            const { login } = useAppContext();
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                setError('');
+                const success = login(username, password);
+                if (success) {
+                    setView('admin');
+                } else {
+                    setError('Invalid username or password.');
+                }
+            };
+
+            return React.createElement('div', { className: 'min-h-screen flex items-center justify-center bg-gray-900 p-4' },
+                React.createElement(Card, { className: 'w-full max-w-sm' },
+                    React.createElement(CardHeader, { className: 'text-center' },
+                        React.createElement('div', { className: 'flex justify-center mb-4' },
+                            React.createElement('div', { className: 'bg-brand-yellow/10 p-3 rounded-full' }, React.createElement(Icons.Lock))
+                        ),
+                        React.createElement(CardTitle, null, 'Admin Login')
+                    ),
+                    React.createElement(CardContent, null,
+                        React.createElement('form', { onSubmit: handleSubmit, className: 'space-y-4' },
+                            React.createElement('div', null,
+                                React.createElement('label', { className: 'text-sm font-medium text-gray-400', htmlFor: 'username' }, 'Username'),
+                                React.createElement('input', { id: 'username', type: 'text', value: username, onChange: e => setUsername(e.target.value), className: 'mt-1 w-full bg-gray-700 border-gray-600 text-white rounded-md p-2 focus:ring-brand-yellow focus:border-brand-yellow', required })
+                            ),
+                            React.createElement('div', null,
+                                React.createElement('label', { className: 'text-sm font-medium text-gray-400', htmlFor: 'password' }, 'Password'),
+                                React.createElement('input', { id: 'password', type: 'password', value: password, onChange: e => setPassword(e.target.value), className: 'mt-1 w-full bg-gray-700 border-gray-600 text-white rounded-md p-2 focus:ring-brand-yellow focus:border-brand-yellow', required })
+                            ),
+                            error && React.createElement('p', { className: 'text-red-500 text-sm' }, error),
+                            React.createElement('button', { type: 'submit', className: 'w-full bg-brand-yellow text-gray-900 font-bold py-2 px-4 rounded-md hover:bg-brand-yellow/90 transition-colors' }, 'Login')
+                        )
+                    )
+                )
+            );
+        };
+        
+        const AdminPage = ({ setView }) => {
+            const { walletBalance, expenses, addBalance, logout, deleteExpense } = useAppContext();
+            const [amountToAdd, setAmountToAdd] = useState('');
+
+            const handleLogout = () => { logout(); setView('login'); };
+            const handleDelete = (id) => { if (window.confirm('Are you sure you want to delete this transaction?')) deleteExpense(id); };
+            const handleAddBalance = (e) => {
+                e.preventDefault();
+                const amount = parseFloat(amountToAdd);
+                if (!isNaN(amount) && amount > 0) { addBalance(amount); setAmountToAdd(''); } else { alert("Please enter a valid amount."); }
+            };
+
+            const transactions = useMemo(() => {
+                const sortedExpenses = [...expenses].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+                let runningBalance = walletBalance;
+                return sortedExpenses.map(current => {
+                    const isCredit = current.item === 'Balance Added';
+                    const trans = { ...current, type: isCredit ? 'credit' : 'expense', runningBalance };
+                    if (isCredit) runningBalance -= current.amount;
+                    else runningBalance += current.amount;
+                    return trans;
+                });
+            }, [expenses, walletBalance]);
+
+            const exportToCSV = () => {
+                const csvData = transactions.map(t => ({
+                    Date: formatDate(t.createdAt, 'yyyy-MM-dd'), Time: formatDate(t.createdAt, 'HH:mm:ss'), Item: t.item, Amount: t.amount, Type: t.type, Message: t.message || '', 'Remaining Balance': t.runningBalance.toFixed(2)
+                }));
+                const csv = Papa.unparse(csvData);
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute('download', `expense_history_${formatDate(new Date(), 'yyyy-MM-dd')}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const expensesByDate = useMemo(() => transactions.reduce((acc, t) => { if (t.type === 'expense') { const dateStr = formatDate(t.createdAt, 'yyyy-MM-dd'); acc[dateStr] = (acc[dateStr] || 0) + t.amount; } return acc; }, {}), [transactions]);
+
+            return React.createElement('div', { className: 'min-h-screen bg-gray-900 text-white p-4 sm:p-6 lg:p-8' },
+                React.createElement('div', { className: 'max-w-7xl mx-auto' },
+                    React.createElement('header', { className: 'mb-8 flex justify-between items-center' },
+                        React.createElement('div', null,
+                            React.createElement('h1', { className: 'text-3xl font-bold text-brand-yellow' }, 'Admin Dashboard'),
+                            React.createElement('p', { className: 'text-gray-400' }, 'Welcome, Sandeep.')
+                        ),
+                        React.createElement('button', { onClick: handleLogout, className: 'flex items-center space-x-2 bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md transition-colors' },
+                            React.createElement(Icons.LogOut), React.createElement('span', { className: 'ml-2' }, 'Logout')
+                        )
+                    ),
+                    React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6' },
+                        React.createElement(Card, { className: 'lg:col-span-1' },
+                            React.createElement(CardContent, { className: 'flex items-center justify-between' },
+                                React.createElement('div', { className: 'flex items-center space-x-3' },
+                                    React.createElement(Icons.Wallet),
+                                    React.createElement('span', { className: 'text-lg text-gray-300' }, 'Current Wallet Balance:')
+                                ),
+                                React.createElement('span', { className: 'text-2xl font-bold text-white' }, `₹${walletBalance.toFixed(2)}`)
+                            )
+                        ),
+                        React.createElement(Card, { className: 'lg:col-span-2' },
+                            React.createElement(CardHeader, null, React.createElement(CardTitle, null, 'Add Balance')),
+                            React.createElement(CardContent, null,
+                                React.createElement('form', { onSubmit: handleAddBalance, className: 'flex flex-col sm:flex-row gap-4' },
+                                    React.createElement('div', { className: 'relative flex-grow' },
+                                        React.createElement('span', { className: 'absolute left-3 top-1/2 -translate-y-1/2 text-gray-400' }, '₹'),
+                                        React.createElement('input', { type: 'number', placeholder: 'Enter Amount', value: amountToAdd, onChange: e => setAmountToAdd(e.target.value), className: 'w-full bg-gray-700 border-gray-600 text-white rounded-md p-2.5 pl-8 focus:ring-brand-yellow focus:border-brand-yellow', required })
+                                    ),
+                                    React.createElement('button', { type: 'submit', className: 'flex-1 flex items-center justify-center bg-brand-yellow text-gray-900 font-bold py-2.5 px-4 rounded-md hover:bg-brand-yellow/90 transition-colors' },
+                                        React.createElement(Icons.PlusCircle), React.createElement('span', { className: 'ml-2' }, 'Add')
+                                    )
+                                )
+                            )
+                        )
+                    ),
+                    React.createElement(Card, null,
+                        React.createElement(CardHeader, { className: 'flex flex-col sm:flex-row justify-between items-start sm:items-center' },
+                            React.createElement(CardTitle, null, 'Expense History'),
+                            React.createElement('button', { onClick: exportToCSV, className: 'mt-2 sm:mt-0 flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm' },
+                                React.createElement(Icons.Download), React.createElement('span', { className: 'ml-2' }, 'Export CSV')
+                            )
+                        ),
+                        React.createElement(CardContent, null,
+                            React.createElement('div', { className: 'overflow-x-auto' },
+                                React.createElement('table', { className: 'w-full text-left text-sm text-gray-300' },
+                                    React.createElement('thead', { className: 'bg-gray-700 text-xs text-gray-200 uppercase' },
+                                        React.createElement('tr', null,
+                                            'Date,Time,Item/Details,Amount,Remaining Bal.,Actions'.split(',').map(h => React.createElement('th', { key: h, className: 'px-4 py-3' + (h.includes('Bal') ? ' text-right' : h === 'Actions' ? ' text-center' : '') }, h))
+                                        )
+                                    ),
+                                    React.createElement('tbody', null,
+                                        transactions.length === 0 ?
+                                            React.createElement('tr', null, React.createElement('td', { colSpan: 6, className: 'text-center py-8 text-gray-400' }, 'No transactions yet.'))
+                                        : transactions.map((t, index) => {
+                                            const dateStr = formatDate(t.createdAt, 'yyyy-MM-dd');
+                                            const prevDateStr = index > 0 ? formatDate(transactions[index - 1].createdAt, 'yyyy-MM-dd') : null;
+                                            const showDateHeader = index === 0 || dateStr !== prevDateStr;
+                                            return React.createElement(React.Fragment, { key: t.id },
+                                                showDateHeader && React.createElement('tr', { className: 'bg-gray-700/50' },
+                                                    React.createElement('td', { colSpan: 4, className: 'px-4 py-2 font-bold text-brand-yellow' }, formatDate(t.createdAt, 'EEEE, do MMMM yyyy')),
+                                                    React.createElement('td', { colSpan: 2, className: 'px-4 py-2 font-bold text-red-400 text-right' }, `Total Spent: ₹${(expensesByDate[dateStr] || 0).toFixed(2)}`)
+                                                ),
+                                                React.createElement('tr', { className: 'border-b border-gray-700 hover:bg-gray-700/50' },
+                                                    React.createElement('td', { className: 'px-4 py-3' }, formatDate(t.createdAt, 'dd/MM/yy')),
+                                                    React.createElement('td', { className: 'px-4 py-3' }, formatDate(t.createdAt, 'p')),
+                                                    React.createElement('td', { className: 'px-4 py-3' },
+                                                        React.createElement('p', { className: 'font-medium text-white' }, t.item),
+                                                        t.message && React.createElement('p', { className: 'text-gray-400 text-xs' }, t.message)
+                                                    ),
+                                                    React.createElement('td', { className: `px-4 py-3 text-right font-semibold ${t.type === 'credit' ? 'text-green-400' : 'text-red-400'}` },
+                                                        `${t.type === 'credit' ? '+' : '-'} ₹${t.amount.toFixed(2)}`
+                                                    ),
+                                                    React.createElement('td', { className: 'px-4 py-3 text-right' }, `₹${t.runningBalance.toFixed(2)}`),
+                                                    React.createElement('td', { className: 'px-4 py-3 text-center' },
+                                                        React.createElement('button', { onClick: () => handleDelete(t.id), className: 'text-gray-400 hover:text-red-500 transition-colors', 'aria-label': 'Delete transaction' }, React.createElement(Icons.Trash2))
+                                                    )
+                                                )
+                                            );
+                                        })
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            );
+        };
+        
+        const App = () => {
+            const { isAdmin } = useAppContext();
+            const [view, setView] = useState('user');
+            
+            useEffect(() => {
+                if (isAdmin && view === 'login') {
+                    setView('admin');
+                } else if (!isAdmin && view === 'admin') {
+                    setView('login');
+                }
+            }, [isAdmin]);
+            
+            let currentView;
+            if (view === 'user') {
+                currentView = React.createElement(UserPage, { setView });
+            } else if (view === 'login') {
+                currentView = React.createElement(LoginPage, { setView });
+            } else if (view === 'admin') {
+                currentView = React.createElement(AdminPage, { setView });
+            }
+            
+            return currentView;
+        };
+        
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(React.createElement(React.StrictMode, null, React.createElement(AppProvider, null, React.createElement(App))));
+        });
+    </script>
+</body>
+</html>
